@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Training - Pase de Lista (Corporativo)</title>
+  <link rel="stylesheet" href="../assets/css/styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="header" id="header"></header>
+      <main class="content">
+        <div id="alertBox" class="alert"></div>
+
+        <!-- Select Session -->
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Pase de Lista</h2>
+          </div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="sessionSelect">Seleccionar Sesion</label>
+                <select id="sessionSelect" class="form-control" onchange="loadAttendance()">
+                  <option value="">-- Seleccionar sesion --</option>
+                </select>
+              </div>
+            </div>
+            <div id="sessionInfo" style="display:none; margin-bottom:16px; padding:12px; background:var(--bg); border-radius:var(--radius);">
+              <strong id="infoCourseName"></strong>
+              <span id="infoDate" style="margin-left:16px; color:var(--text-light);"></span>
+              <span id="infoLocation" style="margin-left:16px; color:var(--text-light);"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Attendance Table -->
+        <div class="card" id="attendanceCard" style="display:none;">
+          <div class="card-header">
+            <h2 class="card-title">Tecnicos Convocados</h2>
+            <button class="btn btn-success" id="btnSaveAttendance" onclick="saveAttendance()">Guardar Asistencia</button>
+          </div>
+          <div class="card-body">
+            <div id="attendanceAlert" class="alert"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tecnico</th>
+                    <th>Dealer</th>
+                    <th>Confirmado por Dealer</th>
+                    <th>Asistencia</th>
+                    <th>Comentarios</th>
+                  </tr>
+                </thead>
+                <tbody id="attendanceTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="../assets/js/app.js"></script>
+  <script>
+    let sessions = [];
+    let currentInvites = [];
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      initPage('ADMIN_MASTER', ['Training', 'Pase de Lista'], 'Admin Corporativo');
+      await loadSessionsList();
+    });
+
+    async function loadSessionsList() {
+      try {
+        sessions = await apiGet('sessions.php');
+        const sel = document.getElementById('sessionSelect');
+        sessions.forEach(s => {
+          sel.appendChild(el('option', {
+            value: s.id,
+            textContent: `${formatDate(s.session_date)} - ${s.course_name} (${locationName(s.location_code)})`,
+          }));
+        });
+      } catch (err) {
+        showAlert('alertBox', err.message, 'danger');
+      }
+    }
+
+    async function loadAttendance() {
+      const sessionId = document.getElementById('sessionSelect').value;
+      if (!sessionId) {
+        document.getElementById('attendanceCard').style.display = 'none';
+        document.getElementById('sessionInfo').style.display = 'none';
+        return;
+      }
+
+      const session = sessions.find(s => s.id == sessionId);
+      if (session) {
+        document.getElementById('sessionInfo').style.display = 'block';
+        document.getElementById('infoCourseName').textContent = session.course_name;
+        document.getElementById('infoDate').textContent = formatDate(session.session_date);
+        document.getElementById('infoLocation').textContent = locationName(session.location_code);
+      }
+
+      try {
+        currentInvites = await apiGet(`invite.php?session_id=${sessionId}`);
+        renderAttendanceTable();
+        document.getElementById('attendanceCard').style.display = 'block';
+      } catch (err) {
+        showAlert('alertBox', err.message, 'danger');
+      }
+    }
+
+    function renderAttendanceTable() {
+      const tbody = document.getElementById('attendanceTable');
+      tbody.innerHTML = '';
+
+      if (currentInvites.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Sin tecnicos invitados a esta sesion</td></tr>';
+        return;
+      }
+
+      currentInvites.forEach(inv => {
+        const confirmed = inv.dealer_confirmed == 1;
+        const existingStatus = inv.attendance_status || '';
+        const existingComments = inv.attendance_comments || '';
+
+        const tr = el('tr', {}, [
+          el('td', { textContent: inv.technician_name }),
+          el('td', { textContent: inv.dealer_name }),
+          el('td', {}, [
+            el('span', {
+              className: `badge ${confirmed ? 'badge-success' : 'badge-warning'}`,
+              textContent: confirmed ? 'Si' : 'No',
+            }),
+          ]),
+          el('td', {}, [
+            confirmed
+              ? (() => {
+                  const select = el('select', {
+                    className: 'form-control',
+                    'data-tech-id': inv.technician_id,
+                    'data-field': 'status',
+                  });
+                  [['', '-- Seleccionar --'], ['PRESENTE', 'Presente'], ['AUSENTE', 'Ausente']].forEach(([val, label]) => {
+                    const opt = el('option', { value: val, textContent: label });
+                    if (val === existingStatus) opt.selected = true;
+                    select.appendChild(opt);
+                  });
+                  return select;
+                })()
+              : el('span', { className: 'badge badge-info', textContent: 'No confirmado' }),
+          ]),
+          el('td', {}, [
+            confirmed
+              ? el('input', {
+                  type: 'text',
+                  className: 'form-control',
+                  placeholder: 'Comentarios...',
+                  value: existingComments,
+                  'data-tech-id': inv.technician_id,
+                  'data-field': 'comments',
+                })
+              : el('span', { textContent: '—' }),
+          ]),
+        ]);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function saveAttendance() {
+      const sessionId = document.getElementById('sessionSelect').value;
+      if (!sessionId) return;
+
+      const records = [];
+      const statusSelects = document.querySelectorAll('select[data-field="status"]');
+      statusSelects.forEach(sel => {
+        if (!sel.value) return;
+        const techId = sel.getAttribute('data-tech-id');
+        const commentsInput = document.querySelector(`input[data-tech-id="${techId}"][data-field="comments"]`);
+        records.push({
+          technician_id: parseInt(techId),
+          status: sel.value,
+          comments: commentsInput ? commentsInput.value : '',
+        });
+      });
+
+      if (records.length === 0) {
+        showAlert('attendanceAlert', 'Seleccione al menos una asistencia', 'warning');
+        return;
+      }
+
+      try {
+        const result = await apiPost('attendance.php', { session_id: parseInt(sessionId), records });
+        showAlert('attendanceAlert', result.message, 'success');
+        // Reload to show saved data
+        loadAttendance();
+      } catch (err) {
+        showAlert('attendanceAlert', err.message, 'danger');
+      }
+    }
+  </script>
+</body>
+</html>

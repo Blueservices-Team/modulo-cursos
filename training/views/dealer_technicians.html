@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Training - Tecnicos (Dealer)</title>
+  <link rel="stylesheet" href="../assets/css/styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="main-wrap">
+      <header class="header" id="header"></header>
+      <main class="content">
+        <div id="alertBox" class="alert"></div>
+
+        <!-- Add Technician -->
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Agregar Tecnico</h2>
+          </div>
+          <div class="card-body">
+            <form id="formTech" autocomplete="off">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="nombre">Nombre *</label>
+                  <input type="text" id="nombre" class="form-control" required>
+                </div>
+                <div class="form-group">
+                  <label for="email">Correo</label>
+                  <input type="email" id="email" class="form-control">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="rfc">RFC</label>
+                  <input type="text" id="rfc" class="form-control" maxlength="20">
+                </div>
+                <div class="form-group">
+                  <label for="telefono">Telefono</label>
+                  <input type="tel" id="telefono" class="form-control">
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary">Agregar Tecnico</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Technicians List -->
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Mis Tecnicos</h2>
+            <button class="btn btn-outline btn-sm" onclick="loadTechnicians()">Actualizar</button>
+          </div>
+          <div class="card-body">
+            <div class="search-bar">
+              <div class="form-group" style="flex:1;">
+                <label for="searchTech">Buscar</label>
+                <input type="text" id="searchTech" class="form-control" placeholder="Nombre, RFC..." oninput="filterTable()">
+              </div>
+              <div class="form-group" style="min-width:120px;flex:0 0 auto;">
+                <label for="filterStatus">Estatus</label>
+                <select id="filterStatus" class="form-control" onchange="filterTable()">
+                  <option value="">Todos</option>
+                  <option value="1" selected>Activos</option>
+                  <option value="0">Inactivos</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Nombre</th>
+                    <th>Correo</th>
+                    <th>RFC</th>
+                    <th>Telefono</th>
+                    <th>Estatus</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="techTable">
+                  <tr><td colspan="6" class="empty-state">Cargando...</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="pagination" id="techPagination"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="modal-overlay" id="editModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Editar Tecnico</h3>
+        <button class="modal-close" onclick="closeModal('editModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="editAlert" class="alert"></div>
+        <form id="formEditTech" autocomplete="off">
+          <input type="hidden" id="editId">
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Nombre *</label>
+            <input type="text" id="editNombre" class="form-control" required>
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Correo</label>
+            <input type="email" id="editEmail" class="form-control">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>RFC</label>
+            <input type="text" id="editRfc" class="form-control" maxlength="20">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Telefono</label>
+            <input type="tel" id="editTelefono" class="form-control">
+          </div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Estatus</label>
+            <select id="editActivo" class="form-control">
+              <option value="1">Activo</option>
+              <option value="0">Inactivo</option>
+            </select>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeModal('editModal')">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveEdit()">Guardar Cambios</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../assets/js/app.js"></script>
+  <script>
+    let allTechs = [];
+    let techPage = 1;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initPage('DEALER_ADMIN', ['Training', 'Tecnicos'], 'Gerente Dealer');
+      loadTechnicians();
+      document.getElementById('formTech').addEventListener('submit', createTech);
+    });
+
+    async function loadTechnicians() {
+      try {
+        allTechs = await apiGet('technicians.php');
+        filterTable();
+      } catch (err) {
+        showAlert('alertBox', err.message, 'danger');
+      }
+    }
+
+    function filterTable() {
+      const search = document.getElementById('searchTech').value.toLowerCase();
+      const statusFilter = document.getElementById('filterStatus').value;
+
+      let filtered = allTechs;
+      if (statusFilter !== '') {
+        filtered = filtered.filter(t => String(t.activo) === statusFilter);
+      }
+      if (search) {
+        filtered = filtered.filter(t =>
+          t.nombre.toLowerCase().includes(search) ||
+          (t.rfc && t.rfc.toLowerCase().includes(search)) ||
+          (t.email && t.email.toLowerCase().includes(search))
+        );
+      }
+      renderTable(filtered, 1);
+    }
+
+    function renderTable(data, page) {
+      techPage = page;
+      const { items, totalPages } = paginate(data, page, 10);
+      const tbody = document.getElementById('techTable');
+      tbody.innerHTML = '';
+
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Sin tecnicos registrados</td></tr>';
+        document.getElementById('techPagination').innerHTML = '';
+        return;
+      }
+
+      items.forEach(t => {
+        const tr = el('tr', {}, [
+          el('td', { textContent: t.nombre }),
+          el('td', { textContent: t.email || '—' }),
+          el('td', { textContent: t.rfc || '—' }),
+          el('td', { textContent: t.telefono || '—' }),
+          el('td', {}, [
+            el('span', {
+              className: `badge ${t.activo == 1 ? 'badge-success' : 'badge-danger'}`,
+              textContent: t.activo == 1 ? 'Activo' : 'Inactivo',
+            }),
+          ]),
+          el('td', {}, [
+            el('button', { className: 'btn btn-sm btn-outline', textContent: 'Editar', onClick: () => openEdit(t) }),
+            document.createTextNode(' '),
+            el('button', { className: 'btn btn-sm btn-danger', textContent: 'Eliminar', onClick: () => deleteTech(t.id, t.nombre) }),
+          ]),
+        ]);
+        tbody.appendChild(tr);
+      });
+
+      renderPagination('techPagination', totalPages, page, (p) => renderTable(data, p));
+    }
+
+    async function createTech(e) {
+      e.preventDefault();
+      const body = {
+        nombre: document.getElementById('nombre').value,
+        email: document.getElementById('email').value || null,
+        rfc: document.getElementById('rfc').value || null,
+        telefono: document.getElementById('telefono').value || null,
+      };
+
+      try {
+        await apiPost('technicians.php', body);
+        showAlert('alertBox', 'Tecnico agregado correctamente', 'success');
+        document.getElementById('formTech').reset();
+        loadTechnicians();
+      } catch (err) {
+        showAlert('alertBox', err.message, 'danger');
+      }
+    }
+
+    function openEdit(tech) {
+      document.getElementById('editId').value = tech.id;
+      document.getElementById('editNombre').value = tech.nombre;
+      document.getElementById('editEmail').value = tech.email || '';
+      document.getElementById('editRfc').value = tech.rfc || '';
+      document.getElementById('editTelefono').value = tech.telefono || '';
+      document.getElementById('editActivo').value = tech.activo;
+      openModal('editModal');
+    }
+
+    async function saveEdit() {
+      const id = document.getElementById('editId').value;
+      const body = {
+        nombre: document.getElementById('editNombre').value,
+        email: document.getElementById('editEmail').value || null,
+        rfc: document.getElementById('editRfc').value || null,
+        telefono: document.getElementById('editTelefono').value || null,
+        activo: parseInt(document.getElementById('editActivo').value),
+      };
+
+      try {
+        await apiPut(`technicians.php?id=${id}`, body);
+        showAlert('editAlert', 'Tecnico actualizado', 'success');
+        setTimeout(() => {
+          closeModal('editModal');
+          loadTechnicians();
+        }, 1000);
+      } catch (err) {
+        showAlert('editAlert', err.message, 'danger');
+      }
+    }
+
+    async function deleteTech(id, nombre) {
+      if (!confirm(`Eliminar a ${nombre}? Esta accion no se puede deshacer.`)) return;
+      try {
+        await apiDelete(`technicians.php?id=${id}`);
+        showAlert('alertBox', 'Tecnico eliminado', 'success');
+        loadTechnicians();
+      } catch (err) {
+        showAlert('alertBox', err.message, 'danger');
+      }
+    }
+  </script>
+</body>
+</html>
