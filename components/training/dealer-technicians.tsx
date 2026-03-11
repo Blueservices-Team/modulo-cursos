@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { ContentCard } from "./content-card"
 import { Button } from "@/components/ui/button"
@@ -21,8 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { technicians, getNextTechId } from "@/lib/training-store"
-import { Plus, Pencil, Search, Users } from "lucide-react"
+import * as api from "@/lib/training-api"
+import type { Technician } from "@/lib/training-types"
+import { Plus, Pencil, Search, Users, Loader2 } from "lucide-react"
 
 interface TechForm {
   nombre: string
@@ -36,23 +37,41 @@ const emptyForm: TechForm = { nombre: "", email: "", rfc: "", telefono: "", acti
 
 export function DealerTechnicians() {
   const { user } = useAuth()
+  const [technicians, setTechnicians] = useState<Technician[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [showDialog, setShowDialog] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState<TechForm>(emptyForm)
-  const [, setRefresh] = useState(0)
+
+  const load = useCallback(async () => {
+    if (!user?.dealer_id) return
+    setError(null)
+    setLoading(true)
+    try {
+      const data = await api.getTechnicians(user.dealer_id)
+      setTechnicians(Array.isArray(data) ? data : [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al cargar técnicos")
+    } finally {
+      setLoading(false)
+    }
+  }, [user?.dealer_id])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   if (!user || !user.dealer_id) return null
 
-  const dealerTechs = technicians
-    .filter((t) => t.dealer_id === user.dealer_id)
-    .filter(
-      (t) =>
-        !searchQuery ||
-        t.nombre.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.rfc.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.email.toLowerCase().includes(searchQuery.toLowerCase())
-    )
+  const dealerTechs = technicians.filter(
+    (t) =>
+      !searchQuery ||
+      t.nombre.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.rfc && t.rfc.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (t.email && t.email.toLowerCase().includes(searchQuery.toLowerCase()))
+  )
 
   function openCreateDialog() {
     setEditId(null)
@@ -60,54 +79,67 @@ export function DealerTechnicians() {
     setShowDialog(true)
   }
 
-  function openEditDialog(techId: number) {
-    const tech = technicians.find((t) => t.id === techId)
-    if (!tech) return
-    setEditId(techId)
+  function openEditDialog(tech: Technician) {
+    setEditId(tech.id)
     setForm({
       nombre: tech.nombre,
-      email: tech.email,
-      rfc: tech.rfc,
-      telefono: tech.telefono,
+      email: tech.email ?? "",
+      rfc: tech.rfc ?? "",
+      telefono: tech.telefono ?? "",
       activo: tech.activo,
     })
     setShowDialog(true)
   }
 
-  function handleSave() {
-    if (!form.nombre || !form.email || !form.rfc) return
+  async function handleSave() {
+    if (!form.nombre) return
 
-    if (editId) {
-      const idx = technicians.findIndex((t) => t.id === editId)
-      if (idx >= 0) {
-        technicians[idx] = {
-          ...technicians[idx],
-          ...form,
-        }
+    try {
+      if (editId) {
+        await api.updateTechnician(editId, {
+          nombre: form.nombre,
+          email: form.email || null,
+          rfc: form.rfc || null,
+          telefono: form.telefono || null,
+          activo: form.activo ? 1 : 0,
+        })
+      } else {
+        await api.createTechnician({
+          dealer_id: user.dealer_id ?? undefined,
+          nombre: form.nombre,
+          email: form.email || null,
+          rfc: form.rfc || null,
+          telefono: form.telefono || null,
+        })
       }
-    } else {
-      technicians.push({
-        id: getNextTechId(),
-        dealer_id: user.dealer_id!,
-        nombre: form.nombre,
-        email: form.email,
-        rfc: form.rfc,
-        telefono: form.telefono,
-        activo: form.activo,
-        created_at: new Date().toISOString(),
-      })
+      setShowDialog(false)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al guardar")
     }
-
-    setShowDialog(false)
-    setRefresh((r) => r + 1)
   }
 
-  function toggleActive(techId: number) {
-    const idx = technicians.findIndex((t) => t.id === techId)
-    if (idx >= 0) {
-      technicians[idx].activo = !technicians[idx].activo
-      setRefresh((r) => r + 1)
+  async function toggleActive(tech: Technician) {
+    try {
+      await api.updateTechnician(tech.id, { activo: tech.activo ? 0 : 1 })
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al actualizar")
     }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Administración de Técnicos</h1>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin" />
+            Cargando...
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -123,7 +155,10 @@ export function DealerTechnicians() {
         </Button>
       </div>
 
-      {/* Search */}
+      {error && (
+        <p className="text-sm text-destructive">{error}</p>
+      )}
+
       <ContentCard>
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
@@ -136,7 +171,6 @@ export function DealerTechnicians() {
         </div>
       </ContentCard>
 
-      {/* Technicians table */}
       <ContentCard title="Técnicos" description={`${dealerTechs.length} técnico(s)`}>
         {dealerTechs.length === 0 ? (
           <div className="text-center py-10">
@@ -160,20 +194,20 @@ export function DealerTechnicians() {
                 {dealerTechs.map((tech) => (
                   <tr key={tech.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                     <td className="py-3 px-2 font-medium text-card-foreground">{tech.nombre}</td>
-                    <td className="py-3 px-2 text-muted-foreground">{tech.email}</td>
-                    <td className="py-3 px-2 text-muted-foreground">{tech.rfc}</td>
-                    <td className="py-3 px-2 text-muted-foreground">{tech.telefono}</td>
+                    <td className="py-3 px-2 text-muted-foreground">{tech.email ?? "—"}</td>
+                    <td className="py-3 px-2 text-muted-foreground">{tech.rfc ?? "—"}</td>
+                    <td className="py-3 px-2 text-muted-foreground">{tech.telefono ?? "—"}</td>
                     <td className="py-3 px-2">
                       <Badge
                         variant={tech.activo ? "default" : "secondary"}
                         className="cursor-pointer"
-                        onClick={() => toggleActive(tech.id)}
+                        onClick={() => toggleActive(tech)}
                       >
                         {tech.activo ? "Activo" : "Inactivo"}
                       </Badge>
                     </td>
                     <td className="py-3 px-2">
-                      <Button variant="outline" size="sm" onClick={() => openEditDialog(tech.id)} className="gap-1">
+                      <Button variant="outline" size="sm" onClick={() => openEditDialog(tech)} className="gap-1">
                         <Pencil className="size-3" />
                         Editar
                       </Button>
@@ -186,7 +220,6 @@ export function DealerTechnicians() {
         )}
       </ContentCard>
 
-      {/* Create/Edit dialog */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -202,7 +235,7 @@ export function DealerTechnicians() {
               />
             </div>
             <div>
-              <Label className="mb-1.5 block">Email *</Label>
+              <Label className="mb-1.5 block">Email</Label>
               <Input
                 type="email"
                 value={form.email}
@@ -212,7 +245,7 @@ export function DealerTechnicians() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label className="mb-1.5 block">RFC *</Label>
+                <Label className="mb-1.5 block">RFC</Label>
                 <Input
                   value={form.rfc}
                   onChange={(e) => setForm((f) => ({ ...f, rfc: e.target.value }))}
@@ -248,7 +281,7 @@ export function DealerTechnicians() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDialog(false)}>Cancelar</Button>
-            <Button onClick={handleSave} disabled={!form.nombre || !form.email || !form.rfc}>
+            <Button onClick={handleSave} disabled={!form.nombre}>
               {editId ? "Guardar Cambios" : "Crear Técnico"}
             </Button>
           </DialogFooter>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { ContentCard } from "./content-card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -12,17 +12,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  trainingSessions,
-  sessionInvites,
-  courses,
-  technicians,
-  dealers,
-  attendance,
-  getNextAttendanceId,
-} from "@/lib/training-store"
+import * as api from "@/lib/training-api"
 import { LOCATIONS } from "@/lib/training-types"
-import { ClipboardCheck, Check, X, AlertCircle } from "lucide-react"
+import type { TrainingSession, SessionInvite, Attendance, Technician, Dealer, Course } from "@/lib/training-types"
+import { ClipboardCheck, Check, X, AlertCircle, Loader2 } from "lucide-react"
 
 interface AttendanceEntry {
   technician_id: number
@@ -31,40 +24,74 @@ interface AttendanceEntry {
 }
 
 export function CorporateAttendance() {
+  const [sessions, setSessions] = useState<TrainingSession[]>([])
+  const [courses, setCourses] = useState<Course[]>([])
+  const [technicians, setTechnicians] = useState<Technician[]>([])
+  const [dealers, setDealers] = useState<Dealer[]>([])
+  const [loading, setLoading] = useState(true)
   const [selectedSessionId, setSelectedSessionId] = useState<string>("")
+  const [invites, setInvites] = useState<SessionInvite[]>([])
+  const [attendanceList, setAttendanceList] = useState<Attendance[]>([])
   const [attendanceEntries, setAttendanceEntries] = useState<AttendanceEntry[]>([])
   const [saved, setSaved] = useState(false)
-  const [, setRefresh] = useState(0)
+  const [error, setError] = useState<string | null>(null)
 
-  const session = selectedSessionId
-    ? trainingSessions.find((s) => s.id === Number(selectedSessionId))
-    : null
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setError(null)
+      setLoading(true)
+      try {
+        const [sess, cour, tech, deal] = await Promise.all([
+          api.getSessions(),
+          api.getCourses(),
+          api.getTechnicians(),
+          api.getDealers(),
+        ])
+        if (!cancelled) {
+          setSessions(Array.isArray(sess) ? sess : [])
+          setCourses(Array.isArray(cour) ? cour : [])
+          setTechnicians(Array.isArray(tech) ? tech : [])
+          setDealers(Array.isArray(deal) ? deal : [])
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Error al cargar")
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
-  const invites = session
-    ? sessionInvites.filter((i) => i.session_id === session.id)
-    : []
-
-  function handleSelectSession(sessionId: string) {
+  const handleSelectSession = useCallback(async (sessionId: string) => {
     setSelectedSessionId(sessionId)
     setSaved(false)
-    const sess = trainingSessions.find((s) => s.id === Number(sessionId))
-    if (!sess) return
-
-    const sessionInvs = sessionInvites.filter((i) => i.session_id === sess.id)
-    const entries: AttendanceEntry[] = sessionInvs
-      .filter((i) => i.dealer_confirmed)
-      .map((inv) => {
-        const existing = attendance.find(
-          (a) => a.session_id === sess.id && a.technician_id === inv.technician_id
-        )
-        return {
-          technician_id: inv.technician_id,
-          status: existing?.status ?? null,
-          comments: existing?.comments ?? "",
-        }
-      })
-    setAttendanceEntries(entries)
-  }
+    if (!sessionId) return
+    const sid = Number(sessionId)
+    try {
+      const [inv, att] = await Promise.all([api.getInvites(sid), api.getAttendance(sid)])
+      const invList = Array.isArray(inv) ? inv : []
+      const attList = Array.isArray(att) ? att : []
+      setInvites(invList)
+      setAttendanceList(attList)
+      const entries: AttendanceEntry[] = invList
+        .filter((i) => i.dealer_confirmed)
+        .map((inv) => {
+          const existing = attList.find(
+            (a) => a.session_id === sid && a.technician_id === inv.technician_id
+          )
+          return {
+            technician_id: inv.technician_id,
+            status: (existing?.status as "PRESENTE" | "AUSENTE") ?? null,
+            comments: existing?.comments ?? "",
+          }
+        })
+      setAttendanceEntries(entries)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al cargar sesión")
+    }
+  }, [])
 
   function setEntryStatus(techId: number, status: "PRESENTE" | "AUSENTE") {
     setAttendanceEntries((prev) =>
@@ -80,38 +107,61 @@ export function CorporateAttendance() {
     setSaved(false)
   }
 
-  function handleSaveAttendance() {
+  async function handleSaveAttendance() {
+    if (!selectedSessionId) return
+    const session = sessions.find((s) => s.id === Number(selectedSessionId))
     if (!session) return
 
-    for (const entry of attendanceEntries) {
-      if (!entry.status) continue
+    const records = attendanceEntries
+      .filter((e) => e.status)
+      .map((e) => ({
+        technician_id: e.technician_id,
+        status: e.status!,
+        comments: e.comments || undefined,
+      }))
+    if (records.length === 0) return
 
-      const existingIdx = attendance.findIndex(
-        (a) => a.session_id === session.id && a.technician_id === entry.technician_id
-      )
-
-      if (existingIdx >= 0) {
-        attendance[existingIdx].status = entry.status
-        attendance[existingIdx].comments = entry.comments
-        attendance[existingIdx].marked_at = new Date().toISOString()
-      } else {
-        attendance.push({
-          id: getNextAttendanceId(),
-          session_id: session.id,
-          technician_id: entry.technician_id,
-          status: entry.status,
-          comments: entry.comments,
-          marked_by_user_id: 1,
-          marked_at: new Date().toISOString(),
+    setError(null)
+    try {
+      await api.markAttendance({ session_id: session.id, records })
+      setSaved(true)
+      const att = await api.getAttendance(session.id)
+      setAttendanceList(Array.isArray(att) ? att : [])
+      const entries: AttendanceEntry[] = invites
+        .filter((i) => i.dealer_confirmed)
+        .map((inv) => {
+          const existing = (Array.isArray(att) ? att : []).find(
+            (a) => a.technician_id === inv.technician_id
+          )
+          return {
+            technician_id: inv.technician_id,
+            status: (existing?.status as "PRESENTE" | "AUSENTE") ?? null,
+            comments: existing?.comments ?? "",
+          }
         })
-      }
+      setAttendanceEntries(entries)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al guardar asistencia")
     }
-    setSaved(true)
-    setRefresh((r) => r + 1)
   }
 
+  const session = selectedSessionId ? sessions.find((s) => s.id === Number(selectedSessionId)) : null
   const course = session ? courses.find((c) => c.id === session.course_id) : null
   const unconfirmedInvites = invites.filter((i) => !i.dealer_confirmed)
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Pase de Lista</h1>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin" />
+            Cargando...
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -120,7 +170,8 @@ export function CorporateAttendance() {
         <p className="text-muted-foreground mt-1">Marque la asistencia de los técnicos confirmados por sus dealers</p>
       </div>
 
-      {/* Session selector */}
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
       <ContentCard title="Seleccionar Sesión">
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex-1 min-w-64">
@@ -129,7 +180,7 @@ export function CorporateAttendance() {
                 <SelectValue placeholder="Seleccione una sesión..." />
               </SelectTrigger>
               <SelectContent>
-                {trainingSessions.map((s) => {
+                {sessions.map((s) => {
                   const c = courses.find((co) => co.id === s.course_id)
                   return (
                     <SelectItem key={s.id} value={s.id.toString()}>
@@ -145,7 +196,6 @@ export function CorporateAttendance() {
 
       {session && (
         <>
-          {/* Session info */}
           <ContentCard>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-sm">
               <div>
@@ -167,7 +217,6 @@ export function CorporateAttendance() {
             </div>
           </ContentCard>
 
-          {/* Unconfirmed notice */}
           {unconfirmedInvites.length > 0 && (
             <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm">
               <AlertCircle className="size-5 text-amber-600 shrink-0" />
@@ -177,7 +226,6 @@ export function CorporateAttendance() {
             </div>
           )}
 
-          {/* Attendance table */}
           <ContentCard
             title="Asistencia"
             actions={

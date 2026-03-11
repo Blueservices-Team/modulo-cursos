@@ -2,9 +2,9 @@
 
 import { useAuth } from "@/lib/auth-context"
 import { ContentCard } from "./content-card"
-import { trainingSessions, sessionInvites, technicians, courses, dealers } from "@/lib/training-store"
+import { useTrainingData } from "@/hooks/use-training-data"
 import { LOCATIONS } from "@/lib/training-types"
-import { CalendarDays, Users, ClipboardCheck, GraduationCap } from "lucide-react"
+import { CalendarDays, Users, ClipboardCheck, GraduationCap, Loader2 } from "lucide-react"
 
 function StatCard({ icon: Icon, label, value, accent }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string | number; accent?: string }) {
   return (
@@ -22,23 +22,47 @@ function StatCard({ icon: Icon, label, value, accent }: { icon: React.ComponentT
 
 export function Dashboard() {
   const { user } = useAuth()
+  const { sessions, technicians, courses, dealers, loading, error } = useTrainingData(
+    user?.role ?? "DEALER_ADMIN",
+    user?.dealer_id ?? null
+  )
+
   if (!user) return null
 
   const isCorp = user.role === "ADMIN_MASTER"
   const today = new Date().toISOString().split("T")[0]
 
-  const futureSessions = trainingSessions.filter((s) => s.session_date >= today)
-  const totalInvites = sessionInvites.length
-  const confirmedInvites = sessionInvites.filter((i) => i.dealer_confirmed).length
+  const futureSessions = sessions.filter((s) => s.session_date >= today)
+  const totalInvites = sessions.reduce((acc, s) => acc + (s.invite_count ?? 0), 0)
+  const confirmedInvites = sessions.reduce((acc, s) => acc + (s.confirmed_count ?? 0), 0)
 
-  // Dealer-specific
   const dealerTechs = isCorp ? technicians : technicians.filter((t) => t.dealer_id === user.dealer_id && t.activo)
-  const dealerInvites = isCorp
-    ? sessionInvites
-    : sessionInvites.filter((inv) => {
-        const tech = technicians.find((t) => t.id === inv.technician_id)
-        return tech && tech.dealer_id === user.dealer_id
-      })
+  const coursesActive = courses.filter((c) => c.activo)
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">{isCorp ? "Panel Corporativo" : "Panel Dealer"}</h1>
+          <p className="text-muted-foreground mt-1 flex items-center gap-2">
+            <Loader2 className="size-4 animate-spin" />
+            Cargando...
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">{isCorp ? "Panel Corporativo" : "Panel Dealer"}</h1>
+          <p className="text-muted-foreground mt-1 text-destructive">{error}</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -53,15 +77,13 @@ export function Dashboard() {
         </p>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon={CalendarDays} label="Sesiones Futuras" value={futureSessions.length} />
         <StatCard icon={Users} label={isCorp ? "Total Técnicos" : "Mis Técnicos"} value={dealerTechs.length} />
-        <StatCard icon={ClipboardCheck} label="Invitaciones Confirmadas" value={isCorp ? confirmedInvites : dealerInvites.filter((i) => i.dealer_confirmed).length} />
-        <StatCard icon={GraduationCap} label="Cursos Activos" value={courses.filter((c) => c.activo).length} />
+        <StatCard icon={ClipboardCheck} label="Invitaciones Confirmadas" value={confirmedInvites} />
+        <StatCard icon={GraduationCap} label="Cursos Activos" value={coursesActive.length} />
       </div>
 
-      {/* Upcoming sessions */}
       <ContentCard title="Próximas Sesiones">
         {futureSessions.length === 0 ? (
           <p className="text-muted-foreground text-sm">No hay sesiones programadas.</p>
@@ -79,22 +101,20 @@ export function Dashboard() {
               </thead>
               <tbody>
                 {futureSessions.slice(0, 5).map((session) => {
-                  const course = courses.find((c) => c.id === session.course_id)
-                  const invites = sessionInvites.filter((i) => i.session_id === session.id)
-                  const confirmed = invites.filter((i) => i.dealer_confirmed)
+                  const courseName = session.course_name ?? courses.find((c) => c.id === session.course_id)?.nombre
+                  const invCount = session.invite_count ?? 0
+                  const confCount = session.confirmed_count ?? 0
                   return (
                     <tr key={session.id} className="border-b border-border last:border-0">
-                      <td className="py-3 px-2 text-card-foreground">{course?.nombre}</td>
+                      <td className="py-3 px-2 text-card-foreground">{courseName}</td>
                       <td className="py-3 px-2 text-card-foreground">{session.session_date}</td>
                       <td className="py-3 px-2 text-muted-foreground">{LOCATIONS[session.location_code]}</td>
-                      <td className="py-3 px-2 text-card-foreground">{invites.length}</td>
+                      <td className="py-3 px-2 text-card-foreground">{invCount}</td>
                       <td className="py-3 px-2">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                          confirmed.length === invites.length && invites.length > 0
-                            ? "bg-green-100 text-green-700"
-                            : "bg-amber-100 text-amber-700"
+                          confCount === invCount && invCount > 0 ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
                         }`}>
-                          {confirmed.length} / {invites.length}
+                          {confCount} / {invCount}
                         </span>
                       </td>
                     </tr>
@@ -106,7 +126,6 @@ export function Dashboard() {
         )}
       </ContentCard>
 
-      {/* Dealers list (corporate only) */}
       {isCorp && (
         <ContentCard title="Dealers Registrados">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
